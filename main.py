@@ -1,4 +1,4 @@
-import tic_tac_toe_multty as player
+ 
 import tic_tac_toe_hard as hard_bot
 import tic_tac_toe_mid as mid_bot
 import tic_tac_toe_easy as easy_bot
