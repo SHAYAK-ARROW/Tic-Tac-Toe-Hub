@@ -1,7 +1,7 @@
- 
 import tic_tac_toe_hard as hard_bot
 import tic_tac_toe_mid as mid_bot
 import tic_tac_toe_easy as easy_bot
+import tic_tac_toe_multty as player
 import os
 from pywebio.input import actions
 from pywebio.output import put_html, clear
@@ -31,7 +31,6 @@ def main():
             {'label': 'EXIT', 'value': 5}
         ]
         
-       
         choice = actions(buttons=dict_of_menu)
         
         if choice == 1:
@@ -43,9 +42,7 @@ def main():
             game = hard_bot.TicTacToe()
             game.play()
         elif choice == 4:
-           # player.main()
-           clear()
-           put_html("UDER DEV")
+            player.main()
         elif choice == 5:
             exit()
 
