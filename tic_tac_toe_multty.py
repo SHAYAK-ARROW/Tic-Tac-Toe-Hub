@@ -1,177 +1,205 @@
-import socket as s
-import inou
-from pywebio.input import input as pw_input
-from pywebio.input import actions
-from pywebio.output import clear, put_html
+from pywebio import start_server
+from pywebio.input import input, NUMBER, actions
+from pywebio.output import put_html, clear
+from pywebio.session import defer_call
+import time
+import random
 
-class TicTacToeMultiplayer:
-    def __init__(self):
-        self.board = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
-        self.moves = 0
-        self.player1 = "X"
-        self.player2 = "O"
+active_rooms = {}
 
-    def check_winner(self):
-        for i in range(3):
-            if self.board[i][0] == self.board[i][1] == self.board[i][2] != 0:
-                return self.board[i][0]
-            if self.board[0][i] == self.board[1][i] == self.board[2][i] != 0:
-                return self.board[0][i]
-        if self.board[0][0] == self.board[1][1] == self.board[2][2] != 0:
-            return self.board[0][0]
-        if self.board[0][2] == self.board[1][1] == self.board[2][0] != 0:
-            return self.board[0][2]
-        return None
+def on_disconnect(room_code):
+    if room_code in active_rooms:
+        active_rooms[room_code]['left'] = True
 
-    def get_real_ip(self):
-        try:
-            dummy_socket = s.socket(s.AF_INET, s.SOCK_DGRAM)
-            dummy_socket.connect(("8.8.8.8", 80))
-            real_ip = dummy_socket.getsockname()[0]
-            dummy_socket.close()
-            return real_ip
-        except Exception:
-            return "127.0.0.1"
-
-    def show_waiting(self, msg):
-        clear()
-        put_html(f"<h2 style='text-align: center;'>{msg}</h2>")
-        grid_html = '<div style="display: grid; grid-template-columns: repeat(3, 85px); gap: 5px; justify-content: center; width: max-content; margin: 20px auto;">'
-        for r in range(3):
-            for c in range(3):
-                cell = self.board[r][c]
-                text = str(cell) if cell != 0 else "&nbsp;"
-                grid_html += f'<div style="width: 80px; height: 80px; border: 1px solid black; display: flex; align-items: center; justify-content: center; font-size: 24px;">{text}</div>'
-        grid_html += '</div><br>'
-        put_html(grid_html)
-
-    def host_side(self, player2):
-        while self.moves < 9:
-            pos = inou.choise(self.board)
-            self.board[(pos-1)//3][(pos-1)%3] = self.player1
-            self.moves += 1
-
-            win = self.check_winner()
-            if win or self.moves == 9:
-                status = win if win else "DRAW"
-                player2.send(f"{pos}|1|{status}".encode("utf-8"))
-                if win:
-                    inou.show_result(self.board, "CONGRATULATIONS! YOU WIN!")
-                else:
-                    inou.show_result(self.board, "MATCH DRAW! (Keu jiteni)")
-                return
+def get_move(board, room_code, my_symbol):
+    clear()
+    put_html(f"<h3 style='text-align:center;'>Room: {room_code} | You: {my_symbol}</h3>")
+    put_html("""
+    <style>
+        .webio-actions form, .webio-btns, div.form-group, form {
+            display: grid !important;
+            grid-template-columns: repeat(3, 85px) !important;
+            justify-content: center !important;
+            gap: 5px !important;
+            width: max-content !important;
+            margin: 20px auto !important;
+        }
+        button.btn {
+            width: 80px !important;
+            height: 80px !important;
+            margin: 0 !important;
+            font-size: 24px !important;
+        }
+    </style>
+    """)
+    
+    btns = []
+    for r in range(3):
+        for c in range(3):
+            pos = (r * 3) + c + 1
+            if board[r][c] == ' ':
+                btns.append({'label': ' ', 'value': pos})
             else:
-                player2.send(f"{pos}|0|CONT".encode("utf-8"))
+                btns.append({'label': str(board[r][c]), 'value': pos, 'disabled': True})
+    
+    return actions(buttons=btns)
 
-            self.show_waiting("WAITING FOR PLAYER 2 ('O') TO MOVE...")
-            client_pos = int(player2.recv(1024).decode('utf-8'))
-            self.board[(client_pos-1)//3][(client_pos-1)%3] = self.player2
-            self.moves += 1
+def show_board_waiting(board, room_code, my_symbol):
+    clear()
+    put_html(f"<h3 style='text-align:center;'>Room: {room_code} | You: {my_symbol}</h3>")
+    put_html("<h4 style='text-align:center; color:grey;'>Waiting for opponent...</h4>")
+    
+    grid_html = '<div style="display: grid; grid-template-columns: repeat(3, 85px); gap: 5px; justify-content: center; width: max-content; margin: 20px auto;">'
+    for r in range(3):
+        for c in range(3):
+            cell = board[r][c]
+            text = str(cell) if cell != ' ' else "&nbsp;"
+            grid_html += f'<div style="width: 80px; height: 80px; border: 1px solid black; display: flex; align-items: center; justify-content: center; font-size: 24px;">{text}</div>'
+    grid_html += '</div><br>'
+    put_html(grid_html)
 
-            win = self.check_winner()
-            if win or self.moves == 9:
-                status = win if win else "DRAW"
-                player2.send(f"ACK|1|{status}".encode("utf-8"))
-                if win:
-                    inou.show_result(self.board, "PLAYER 2 WINS! YOU LOSE!")
-                else:
-                    inou.show_result(self.board, "MATCH DRAW! (Keu jiteni)")
-                return
-            else:
-                player2.send(f"ACK|0|CONT".encode("utf-8"))
-
-    def host(self):
-        Family = s.AF_INET
-        Type = s.SOCK_STREAM 
-        server = s.socket(Family, Type)
-        
-        Ip = "0.0.0.0"
-        Port = 5050
-        server.bind((Ip, Port))
-        server.listen(1)
-        
-        real_ip = self.get_real_ip()
-        clear()
-        put_html(f"<h2 style='text-align: center;'>SERVER STARTED!<br><br>SHARE THIS IP: <span style='color: blue;'>{real_ip}</span><br>PORT: {Port}<br><br>WAITING FOR PLAYER 2 TO JOIN...</h2>")
-
-        player2, address = server.accept()
-
-        self.host_side(player2)
-        player2.close()  
-        server.close()
-
-    def recive_side(self, server):
-        while self.moves < 9:
-            self.show_waiting("WAITING FOR PLAYER 1 ('X') TO MOVE...")
-            data = server.recv(1024).decode("utf-8").split("|")
-            host_pos = int(data[0]) if data[0] != "ACK" else None
-            flag = data[1]
-            status = data[2]
-
-            if host_pos:
-                self.board[(host_pos-1)//3][(host_pos-1)%3] = self.player1
-                self.moves += 1
-
-            if flag == "1":
-                if status == "X":
-                    inou.show_result(self.board, "PLAYER 1 WINS! YOU LOSE!")
-                else:
-                    inou.show_result(self.board, "MATCH DRAW! (Keu jiteni)")
-                return
-
-            pos = inou.choise(self.board)
-            self.board[(pos-1)//3][(pos-1)%3] = self.player2
-            self.moves += 1
-            server.send(str(pos).encode("utf-8"))
-
-            data = server.recv(1024).decode("utf-8").split("|")
-            flag = data[1]
-            status = data[2]
-
-            if flag == "1":
-                if status == "O":
-                    inou.show_result(self.board, "CONGRATULATIONS! YOU WIN!")
-                else:
-                    inou.show_result(self.board, "MATCH DRAW! (Keu jiteni)")
-                return
-
-    def recive(self):
-        clear()
-        put_html("<h2 style='text-align: center;'>JOIN A GAME</h2>")
-        try:
-            Ip = pw_input("ENTER PLAYER 1 IP ADDRESS: ").strip()
-            Port = 5050 
-            
-            Family = s.AF_INET
-            Type = s.SOCK_STREAM
-            server = s.socket(Family, Type)
-            server.connect((Ip, Port))
-            
-            self.recive_side(server)
-            server.close()  
-        except Exception as E:
-            clear()
-            put_html(f"<h2 style='text-align: center; color: red;'>CONNECTION ERROR:<br>{E}</h2>")
-            actions(buttons=[{'label': 'Return to Menu', 'value': 'back'}])
+def check_winner(board):
+    for i in range(3):
+        if board[i][0] == board[i][1] == board[i][2] != ' ': return board[i][0]
+        if board[0][i] == board[1][i] == board[2][i] != ' ': return board[0][i]
+    
+    if board[0][0] == board[1][1] == board[2][2] != ' ': return board[0][0]
+    if board[0][2] == board[1][1] == board[2][0] != ' ': return board[0][2]
+    
+    for row in board:
+        if ' ' in row: return None
+    return 'Draw'
 
 def main():
     clear()
-    put_html("<h2 style='text-align: center;'>MULTIPLAYER (LAN)</h2>")
+    put_html("<h1 style='text-align:center;'>Tic-Tac-Toe Multiplayer</h1>")
     
-    ch = actions(buttons=[
-        {'label': '1. START A GAME (HOST)', 'value': 1},
-        {'label': '2. JOIN A GAME (CLIENT)', 'value': 2},
-        {'label': 'RETURN TO MAIN MENU', 'value': 3}
-    ])
+    choice = actions(buttons=[{'label': 'HOST GAME', 'value': 1}, {'label': 'JOIN GAME', 'value': 2}])
     
-    if ch == 3:
-        return
+    if choice == 1:
+        room_code = str(random.randint(1000, 9999))
         
-    game_servers = TicTacToeMultiplayer()
-    if ch == 1:
-        game_servers.host()
-    elif ch == 2:
-        game_servers.recive()
+        host_sym = random.choice(['X', 'O'])
+        joiner_sym = 'O' if host_sym == 'X' else 'X'
+        
+        active_rooms[room_code] = {
+            'board': [[' ', ' ', ' '], [' ', ' ', ' '], [' ', ' ', ' ']],
+            'turn': 'X',
+            'player2_joined': False,
+            'winner': None,
+            'host_symbol': host_sym,
+            'joiner_symbol': joiner_sym,
+            'play_again_ready': set(),
+            'left': False
+        }
+        my_symbol = host_sym
+        
+        defer_call(lambda: on_disconnect(room_code))
+        
+        clear()
+        put_html(f"<h2 style='text-align:center;'>Room Code: {room_code}</h2>")
+        put_html(f"<h3 style='text-align:center; color:blue;'>You are: {my_symbol}</h3>")
+        put_html("<h4 style='text-align:center; color:grey;'>Waiting for player 2...</h4>")
+        
+        while not active_rooms[room_code]['player2_joined']:
+            if active_rooms[room_code]['left']: return
+            time.sleep(1)
+            
+    else:
+        room_code = input("Enter 4-digit Room Code:", type=NUMBER)
+        room_code = str(room_code)
+        
+        if room_code in active_rooms and not active_rooms[room_code]['player2_joined']:
+            active_rooms[room_code]['player2_joined'] = True
+            my_symbol = active_rooms[room_code]['joiner_symbol']
+            
+            defer_call(lambda: on_disconnect(room_code))
+        else:
+            clear()
+            put_html("<h2 style='color:red; text-align:center;'>Invalid Room!</h2>")
+            actions(buttons=[{'label': 'EXIT', 'value': 'exit'}])
+            return
 
-if __name__ == "__main__":
-    main()
+    while True:
+        if active_rooms[room_code]['left']:
+            clear()
+            put_html("<h1 style='color:red; text-align:center;'>Opponent left the match!</h1>")
+            actions(buttons=[{'label': 'Main Menu', 'value': 'back'}])
+            main()
+            return
+
+        if my_symbol != active_rooms[room_code]['host_symbol'] and my_symbol != active_rooms[room_code]['joiner_symbol']:
+            pass
+        else:
+            if choice == 1:
+                my_symbol = active_rooms[room_code]['host_symbol']
+            else:
+                my_symbol = active_rooms[room_code]['joiner_symbol']
+
+        winner = active_rooms[room_code]['winner']
+        if not winner:
+            winner = check_winner(active_rooms[room_code]['board'])
+            if winner:
+                active_rooms[room_code]['winner'] = winner
+                
+        if winner:
+            show_board_waiting(active_rooms[room_code]['board'], room_code, my_symbol)
+            if winner == 'Draw':
+                put_html("<h2 style='color:orange; text-align:center;'>MATCH DRAW!</h2>")
+            elif winner == my_symbol:
+                put_html("<h2 style='color:green; text-align:center;'>YOU WIN!</h2>")
+            else:
+                put_html("<h2 style='color:red; text-align:center;'>YOU LOSE!</h2>")
+            
+            end_choice = actions(buttons=[{'label': 'Play Again', 'value': 'again'}, {'label': 'Leave Room', 'value': 'leave'}])
+            
+            if end_choice == 'leave':
+                active_rooms[room_code]['left'] = True
+                main()
+                return
+            else:
+                active_rooms[room_code]['play_again_ready'].add(my_symbol)
+                clear()
+                put_html("<h3 style='text-align:center;'>Waiting for opponent to accept...</h3>")
+                
+                while len(active_rooms[room_code]['play_again_ready']) < 2:
+                    if active_rooms[room_code]['left']:
+                        clear()
+                        put_html("<h1 style='color:red; text-align:center;'>Opponent left the match!</h1>")
+                        actions(buttons=[{'label': 'Main Menu', 'value': 'back'}])
+                        main()
+                        return
+                    time.sleep(1)
+                
+                if choice == 1:
+                    new_host_sym = random.choice(['X', 'O'])
+                    new_joiner_sym = 'O' if new_host_sym == 'X' else 'X'
+                    
+                    active_rooms[room_code]['host_symbol'] = new_host_sym
+                    active_rooms[room_code]['joiner_symbol'] = new_joiner_sym
+                    active_rooms[room_code]['board'] = [[' ', ' ', ' '], [' ', ' ', ' '], [' ', ' ', ' ']]
+                    active_rooms[room_code]['winner'] = None
+                    active_rooms[room_code]['turn'] = 'X'
+                    time.sleep(0.5)
+                    active_rooms[room_code]['play_again_ready'].clear()
+                else:
+                    while active_rooms[room_code]['winner'] is not None:
+                        time.sleep(0.2)
+                
+                continue
+            
+        if active_rooms[room_code]['turn'] == my_symbol:
+            pos = get_move(active_rooms[room_code]['board'], room_code, my_symbol)
+            r = (pos - 1) // 3
+            c = (pos - 1) % 3
+            
+            active_rooms[room_code]['board'][r][c] = my_symbol
+            active_rooms[room_code]['turn'] = 'O' if my_symbol == 'X' else 'X'
+        else:
+            show_board_waiting(active_rooms[room_code]['board'], room_code, my_symbol)
+            while active_rooms[room_code]['turn'] != my_symbol and active_rooms[room_code]['winner'] is None:
+                if active_rooms[room_code]['left']: break
+                time.sleep(1)
+
+if __name__ == '__main__':
+    start_server(main, port=8080)
